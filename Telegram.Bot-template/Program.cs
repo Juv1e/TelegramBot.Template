@@ -11,10 +11,12 @@ class Program
 {
     public static ITelegramBotClient botClient = new TelegramBotClient("TELEGRAM_TOKEN");
     private static readonly Dictionary<string, ICommandModule> CommandModules = new();
-
+    private static readonly Dictionary<string, ICallbackCommandModule> CallbackCommandModules = new();
+    
     static async Task Main()
     {
         RegisterCommandModules();
+        RegisterCallbackCommandModules();
         CancellationTokenSource cts = new CancellationTokenSource();
         ReceiverOptions receiverOptions = new ReceiverOptions
         {
@@ -34,38 +36,50 @@ class Program
         {
             case UpdateType.Message:
             {
-                string? message = new[] { e.Message.Text, e.Message.Caption }
-                    .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? "";
-                Console.WriteLine($"[{e.Message.Chat.Id} - @{e.Message.From.Username}] {message}");
-                if (e.Message.Type == MessageType.Text || e.Message.Type == MessageType.Photo ||
-                    e.Message.Type == MessageType.Video && message.Length > 0)
+                await Task.Run(async () =>
                 {
-                    var command = message.Split(' ')[0];
-                    
-                    if (CommandModules.TryGetValue(command, out var module) && !AntiFlood.IsFlood(e.Message.Chat.Id))
+                    string? message = new[] {e.Message.Text, e.Message.Caption}
+                        .FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)) ?? "";
+                    Console.WriteLine($"[{e.Message.Chat.Id} - @{e.Message.From.Username}] {message}");
+                    if (e.Message.Type == MessageType.Text || e.Message.Type == MessageType.Photo ||
+                        e.Message.Type == MessageType.Video && message.Length > 0)
                     {
-                        var response = await module.HandleCommandAsync(botClient, e);
-                        if (!string.IsNullOrWhiteSpace(response))
+                        var command = message.Split(' ')[0];
+
+                        if (CommandModules.TryGetValue(command, out var module) &&
+                            !AntiFlood.IsFlood(e.Message.Chat.Id))
                         {
-                            await botClient.SendTextMessageAsync(e.Message.Chat.Id, response);
+                            var response = await module.HandleCommandAsync(botClient, e);
+                            if (!string.IsNullOrWhiteSpace(response))
+                            {
+                                await botClient.SendTextMessageAsync(e.Message.Chat.Id, response);
+                            }
                         }
                     }
-                }
-
+                });
                 break;
             }
             case UpdateType.CallbackQuery:
             {
-                var data = e.CallbackQuery.Data;
-                switch (data)
+                await Task.Run(async () =>
                 {
-                    case "data1":
-                        //обработка кнопки с data1
-                        break;
-                    case "data2":
-                        //обработка кнопки с data2
-                        break;
-                }
+                    var command = e.CallbackQuery.Data;
+                    if (CallbackCommandModules.TryGetValue(command, out var module))
+                    {
+                        if (AntiFlood.IsFlood(e.CallbackQuery.Message.Chat.Id))
+                        {
+                            await botClient.SendTextMessageAsync(e.CallbackQuery.Message.Chat.Id,
+                                "Too many requests in a short period of time. Please wait a little longer.");
+                            return;
+                        }
+
+                        var response = await module.HandleCallbackCommandAsync(botClient, e);
+                        if (!string.IsNullOrWhiteSpace(response))
+                        {
+                            await botClient.SendTextMessageAsync(e.CallbackQuery.Message.Chat.Id, response);
+                        }
+                    }
+                });
                 break;
             }
         }
@@ -83,15 +97,24 @@ class Program
     }
     private static void RegisterCommandModules()
     {
-        // Получаем все классы, реализующие интерфейс ICommandModule
         var commandModuleTypes = Assembly.GetExecutingAssembly().GetTypes()
             .Where(t => t.IsClass && !t.IsAbstract && typeof(ICommandModule).IsAssignableFrom(t));
-
-        // Создаем экземпляры классов и регистрируем их в словаре CommandModules
+        
         foreach (var type in commandModuleTypes)
         {
             var commandModule = (ICommandModule)Activator.CreateInstance(type);
             CommandModules[commandModule.Command] = commandModule;
+        }
+    }
+    private static void RegisterCallbackCommandModules()
+    {
+        var commandModuleTypes = Assembly.GetExecutingAssembly().GetTypes()
+            .Where(t => t.IsClass && !t.IsAbstract && typeof(ICallbackCommandModule).IsAssignableFrom(t));
+        
+        foreach (var type in commandModuleTypes)
+        {
+            var commandModule = (ICallbackCommandModule)Activator.CreateInstance(type);
+            CallbackCommandModules[commandModule.Command] = commandModule;
         }
     }
 }
